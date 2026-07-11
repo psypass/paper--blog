@@ -4,9 +4,9 @@ __pycache__/
 *.py[cod]
 
 # Local application state and credentials
-memory/
-uploads/
-outputs/
+/memory/
+/uploads/
+/outputs/
 .env
 .env.*
 !.env.example
@@ -17,7 +17,7 @@ outputs/
 .DS_Store
 
 # Test and tool caches
-tests/
+/tests/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
