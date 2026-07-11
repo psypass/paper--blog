@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Blog Agent</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="/assets/api.js"></script>
+  <script src="/assets/markdown.js"></script>
+  <script src="/assets/activities.js"></script>
+  <script src="/assets/search_mode.js"></script>
+  <script src="/assets/theme.js"></script>
+</head>
+<body>
+  <main id="app" class="app-shell">
+    <aside class="project-rail">
+      <div class="brand">
+        <div class="mark">P</div>
+        <div>
+          <h1>Paper Blog</h1>
+          <p>研究会话</p>
+        </div>
+      </div>
+
+      <button class="new-chat" type="button" @click="newConversation">新调研</button>
+
+      <section class="history">
+        <h2>往期项目</h2>
+        <div
+          v-for="item in history"
+          :key="item.paper_id"
+          class="history-item"
+          :class="{ active: item.paper_id === activePaperId }"
+        >
+          <button class="history-open" type="button" @click="selectProject(item)">
+            <span>{{ item.title }}</span>
+            <small>{{ sourceLabel(item.source_type) }}</small>
+          </button>
+          <button
+            class="delete-history"
+            type="button"
+            title="删除项目"
+            @click.stop="deleteProject(item)"
+          >删除</button>
+        </div>
+        <p v-if="!history.length" class="empty">还没有调研记录。</p>
+      </section>
+
+      <button class="settings-entry" type="button" @click="settingsOpen = true; settingsSection = 'model'">设置</button>
+    </aside>
+
+    <section class="chat-pane">
+      <header class="chat-top">
+        <div>
+          <h2>{{ activeTitle }}</h2>
+          <p>{{ activeSubtitle }}</p>
+        </div>
+        <div class="top-actions">
+          <button
+            class="theme-switch"
+            :class="{ dark: theme === 'dark' }"
+            type="button"
+            :aria-label="theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'"
+            :title="theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'"
+            @click="toggleTheme"
+          >
+            <span class="theme-icon moon" aria-hidden="true">☾</span>
+            <span class="theme-icon sun" aria-hidden="true">☀</span>
+            <span class="theme-thumb" aria-hidden="true"></span>
+          </button>
+          <span class="state-chip">{{ statusLabel }}</span>
+        </div>
+      </header>
+
+      <div class="messages" ref="messagesEl">
+        <article v-for="message in messages" :key="message.id" class="message" :class="message.role">
+          <section
+            v-if="message.role === 'assistant' && message.activities?.length"
+            class="message-activity"
+            :class="{ expanded: message.activityOpen }"
+          >
+            <button class="message-activity-summary" type="button" @click="message.activityOpen = !message.activityOpen">
+              <span class="activity-dot" :class="currentActivity(message)?.state"></span>
+              <strong>{{ currentActivity(message)?.summary || 'Agent 准备中' }}</strong>
+              <small>{{ message.activityOpen ? '收起' : `展开 ${message.activities.length} 步` }}</small>
+            </button>
+            <div v-if="message.activityOpen" class="message-activity-list">
+              <div
+                v-for="activity in message.activities"
+                :key="activity.id"
+                class="activity-item"
+                :class="activity.state"
+              >
+                <span class="activity-dot"></span>
+                <div class="activity-body">
+                  <strong>{{ activity.summary }}</strong>
+                  <p v-if="activity.detail">{{ activity.detail }}</p>
+                  <div v-if="activity.sites?.length" class="activity-sites">
+                    <a
+                      v-for="site in activity.sites"
+                      :key="site.url || site.title"
+                      :href="site.url"
+                      target="_blank"
+                      rel="noopener"
+                    >
+                      <span>{{ site.title }}</span>
+                      <small>{{ site.domain }}</small>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <div class="bubble">
+            <div
+              v-if="message.text"
+              class="message-text message-markdown"
+              v-html="renderMarkdown(message.text)"
+            ></div>
+
+            <div v-if="message.result" class="result-card">
+              <div class="result-head">
+                <div>
+                  <strong>{{ message.result.title }}</strong>
+                  <span>{{ message.result.detectedType }} · {{ message.result.verifyState }}</span>
+                </div>
+                <a
+                  v-if="message.result.htmlUrl"
+                  class="open-html"
+                  :href="message.result.htmlUrl"
+                  target="_blank"
+                  rel="noopener"
+                >打开 HTML</a>
+              </div>
+              <iframe title="HTML preview" :srcdoc="themedResultHtml(message.result.html)"></iframe>
+            </div>
+
+            <details v-if="message.sources?.length" class="source-fold">
+              <summary>查看引用片段</summary>
+              <div v-for="source in message.sources" :key="source.id" class="source-snippet">
+                <strong>来源 {{ source.id }}</strong>
+                <p>{{ source.text }}</p>
+              </div>
+            </details>
+          </div>
+        </article>
+      </div>
+
+      <form class="composer" @submit.prevent="submit">
+        <div class="composer-style-row">
+          <div class="blog-type-control" role="radiogroup" aria-label="回答风格">
+            <p class="blog-type-pill-status" :class="{ technical: blogType === 'technical' }">
+              <i aria-hidden="true"></i>{{ blogTypeStatus }}
+            </p>
+            <div class="blog-type-pill" :class="[`mode-${blogTypeIndex}`, { technical: blogType === 'technical' }]">
+              <canvas ref="blogTypePillCanvas" class="blog-type-pill-canvas" aria-hidden="true"></canvas>
+              <span class="blog-type-pill-track" aria-hidden="true"></span>
+              <span class="blog-type-pill-indicator" aria-hidden="true"></span>
+              <input
+                class="blog-type-pill-range"
+                type="range"
+                min="0"
+                max="2"
+                step="1"
+                :value="blogTypeIndex"
+                aria-label="回答风格"
+                @input="updateBlogType"
+              >
+              <div class="blog-type-pill-labels">
+                <button type="button" :class="{ active: blogType === 'popular' }" @click="selectBlogType('popular')">科普</button>
+                <button type="button" :class="{ active: blogType === 'learning' }" @click="selectBlogType('learning')">学习</button>
+                <button type="button" :class="{ active: blogType === 'technical' }" @click="selectBlogType('technical')">技术</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="composer-box">
+          <textarea
+            v-model="draft"
+            rows="3"
+            placeholder="粘贴 arXiv、Markdown，上传文件，或直接追问当前论文"
+            @keydown.enter.exact.prevent="submit"
+            @keydown.shift.enter.stop
+            @keydown.meta.enter.prevent="submit"
+            @keydown.ctrl.enter.prevent="submit"
+          ></textarea>
+          <div class="composer-toolbar">
+            <div class="composer-tools">
+              <label class="file-button" title="添加附件">
+                <input type="file" accept=".pdf,.md,.markdown,.docx" @change="onFileChange">
+                <span>{{ file ? '✓' : '+' }}</span>
+              </label>
+
+              <label class="inline-select">
+                <span>模型</span>
+                <select v-model="llm.model" :disabled="!modelOptions.length" @change="persistConfigQuietly">
+                  <option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</option>
+                  <option v-if="!modelOptions.length" :value="llm.model">
+                    {{ llm.model || '先在设置里获取模型列表' }}
+                  </option>
+                </select>
+              </label>
+
+              <label class="inline-select search-mode-select">
+                <span>联网</span>
+                <select v-model="search.mode" @change="persistConfigQuietly" aria-label="联网模式">
+                  <option value="off">离线</option>
+                  <option value="auto">自动补充</option>
+                  <option value="always">总是联网</option>
+                </select>
+              </label>
+
+            </div>
+
+            <div class="composer-submit">
+              <span>{{ detectorText }}</span>
+              <button class="send-button" type="submit" :disabled="working" aria-label="发送" title="发送">
+                <span aria-hidden="true">{{ working ? '...' : '↑' }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <div v-if="settingsOpen" class="modal-backdrop" @click.self="settingsOpen = false">
+      <section class="settings-modal settings-drawer" aria-label="应用设置">
+        <header>
+          <div>
+            <h2>设置</h2>
+            <p>模型、偏好和联网补充分开管理。</p>
+          </div>
+          <button class="settings-close" type="button" @click="settingsOpen = false">关闭</button>
+        </header>
+
+        <div class="settings-layout">
+          <nav class="settings-sidebar" aria-label="设置分组">
+            <button
+              v-for="item in settingsSections"
+              :key="item.id"
+              type="button"
+              :class="{ active: settingsSection === item.id }"
+              @click="settingsSection = item.id"
+            >
+              <strong>{{ item.label }}</strong>
+              <span>{{ item.description }}</span>
+            </button>
+          </nav>
+
+          <div class="settings-content">
+            <section v-show="settingsSection === 'model'" class="settings-panel">
+              <h3>模型设置</h3>
+              <p>选择供应商，或填入兼容 OpenAI 格式的 Base URL。</p>
+
+              <div class="settings-grid">
+                <label>
+                  <span>供应商</span>
+                  <select v-model="llm.providerId" @change="applyProvider">
+                    <option v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Base URL</span>
+                  <input v-model="llm.baseUrl" type="url" placeholder="https://api.example.com/v1">
+                </label>
+
+                <label>
+                  <span>API Key</span>
+                  <input v-model="llm.apiKey" type="password" autocomplete="off" placeholder="保存到本地配置文件">
+                </label>
+
+                <label>
+                  <span>模型</span>
+                  <select v-model="llm.model" v-if="modelOptions.length" @change="persistConfigQuietly">
+                    <option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</option>
+                  </select>
+                  <input v-else v-model="llm.model" placeholder="先拉取列表，或手动输入" @change="persistConfigQuietly">
+                </label>
+
+                <div class="model-tools">
+                  <span>{{ modelStatus }}</span>
+                  <button type="button" @click="loadModels" :disabled="loadingModels">获取模型列表</button>
+                </div>
+              </div>
+            </section>
+
+            <section v-show="settingsSection === 'profile'" class="settings-panel">
+              <h3>用户偏好</h3>
+              <p>控制默认写作版本、解释深度、语气和关注重点。</p>
+
+              <div class="settings-grid">
+                <label>
+                  <span>输出语言</span>
+                  <select v-model="profile.language">
+                    <option>中文</option>
+                    <option>English</option>
+                    <option>中英双语</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>默认版本</span>
+                  <select v-model="profile.default_blog_type">
+                    <option value="popular">科普</option>
+                    <option value="learning">学习</option>
+                    <option value="technical">技术</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>目标读者</span>
+                  <input v-model="profile.target_reader" placeholder="正在学习该方向的读者">
+                </label>
+
+                <label>
+                  <span>语气</span>
+                  <input v-model="profile.tone" placeholder="清晰、可靠、避免营销腔">
+                </label>
+
+                <label>
+                  <span>深度</span>
+                  <select v-model="profile.depth">
+                    <option>简略</option>
+                    <option>中等</option>
+                    <option>深入</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>公式处理</span>
+                  <select v-model="profile.math_level">
+                    <option>少用公式，多讲直觉</option>
+                    <option>保留必要公式并解释直觉</option>
+                    <option>尽量保留公式和推导</option>
+                  </select>
+                </label>
+
+                <label class="wide-field">
+                  <span>文章结构</span>
+                  <input v-model="profileStructureText" placeholder="导语、核心问题、方法解释、结果解读、局限、总结">
+                </label>
+
+                <label class="wide-field">
+                  <span>关注重点</span>
+                  <input v-model="profileFocusText" placeholder="方法、核心概念、局限">
+                </label>
+              </div>
+            </section>
+
+            <section v-show="settingsSection === 'search'" class="settings-panel">
+              <h3>联网补充</h3>
+              <p>选择不联网、证据不足时自动搜索，或总是搜索并将联网结果作为参考证据。</p>
+
+              <div class="settings-grid">
+                <label>
+                  <span>触发模式</span>
+                  <select v-model="search.mode" @change="persistConfigQuietly">
+                    <option value="auto">上下文不足时自动搜索</option>
+                    <option value="always">总是搜索（始终联网作为参考）</option>
+                    <option value="off">不联网</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>搜索供应商</span>
+                  <select v-model="search.provider">
+                    <option value="tavily">Tavily</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Search API Key</span>
+                  <input v-model="search.apiKey" type="password" autocomplete="off" placeholder="保存到本地配置文件">
+                </label>
+
+                <label>
+                  <span>最大结果数</span>
+                  <input v-model.number="search.maxResults" min="1" max="10" type="number">
+                </label>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button type="button" class="save-settings" @click="saveSettings">保存设置</button>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

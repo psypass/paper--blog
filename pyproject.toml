@@ -1,0 +1,23 @@
+[project]
+name = "paper-blog-agent"
+version = "0.1.0"
+description = "Multi-source paper-to-blog agent prototype with memory and HTML output."
+requires-python = ">=3.10"
+dependencies = [
+  "python-docx>=1.1.0",
+  "pypdf>=4.0.0",
+  "requests>=2.31.0",
+  "langgraph>=0.2.0",
+]
+
+[project.scripts]
+paper-blog-agent = "paper_blog_agent.cli:main"
+paper-blog-agent-web = "paper_blog_agent.web:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["paper_blog_agent*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
